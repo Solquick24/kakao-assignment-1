@@ -45,11 +45,21 @@ function loadFromLocalStorage() {
   // 저장된 데이터가 없으면(최초 실행) 아무것도 하지 않음
   if (!savedData) return;
 
-  const parsedData = JSON.parse(savedData);
+  // 저장된 값이 손상됐거나 형식이 잘못된 경우(JSON.parse 실패)에 대비한 예외 처리
+  // 파싱에 실패하면 앱이 멈추지 않도록 손상된 데이터를 비우고 기본 상태로 시작
+  try {
+    const parsedData = JSON.parse(savedData);
 
-  // 불러온 값이 있으면 복원하고, 없으면 기본값 유지
-  todos = parsedData.todos || [];
-  nextTodoId = parsedData.nextTodoId || 1;
+    // 불러온 값이 배열이 맞을 때만 복원, 아니면 안전하게 빈 배열 사용
+    todos = Array.isArray(parsedData.todos) ? parsedData.todos : [];
+    nextTodoId = parsedData.nextTodoId || 1;
+  } catch (error) {
+    // 손상된 데이터는 제거하고 초기 상태로 진행
+    console.error("저장된 데이터를 불러오지 못했습니다. 초기화합니다.", error);
+    localStorage.removeItem(STORAGE_KEY);
+    todos = [];
+    nextTodoId = 1;
+  }
 }
 
 /* =========================
