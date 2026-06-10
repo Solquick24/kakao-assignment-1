@@ -45,11 +45,21 @@ function loadFromLocalStorage() {
   // 저장된 데이터가 없으면(최초 실행) 아무것도 하지 않음
   if (!savedData) return;
 
-  const parsedData = JSON.parse(savedData);
+  // 저장된 값이 손상됐거나 형식이 잘못된 경우(JSON.parse 실패)에 대비한 예외 처리
+  // 파싱에 실패하면 앱이 멈추지 않도록 손상된 데이터를 비우고 기본 상태로 시작
+  try {
+    const parsedData = JSON.parse(savedData);
 
-  // 불러온 값이 있으면 복원하고, 없으면 기본값 유지
-  todos = parsedData.todos || [];
-  nextTodoId = parsedData.nextTodoId || 1;
+    // 불러온 값이 배열이 맞을 때만 복원, 아니면 안전하게 빈 배열 사용
+    todos = Array.isArray(parsedData.todos) ? parsedData.todos : [];
+    nextTodoId = parsedData.nextTodoId || 1;
+  } catch (error) {
+    // 손상된 데이터는 제거하고 초기 상태로 진행
+    console.error("저장된 데이터를 불러오지 못했습니다. 초기화합니다.", error);
+    localStorage.removeItem(STORAGE_KEY);
+    todos = [];
+    nextTodoId = 1;
+  }
 }
 
 /* =========================
@@ -99,14 +109,51 @@ function getWeekStart(date) {
    주간 뷰 렌더링
 ========================= */
 
-// 현재 weekStartDate 기준으로 월~일 7개 날짜 칸을 생성
-function renderWeekView() {
-  // 기존 칸을 비우고 다시 그림
-  weekView.innerHTML = "";
-
+// 날짜 칸(.day) 하나를 만들어 반환 (renderWeekView에서 사용)
+function createDayBox(date) {
   const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
   const todayStr = formatDate(new Date());
   const selectedStr = formatDate(selectedDate);
+  const dateStr = formatDate(date);
+
+  // 해당 날짜의 Todo 개수 계산
+  const count = todos.filter((todo) => todo.date === dateStr).length;
+
+  const dayBox = document.createElement("div");
+  dayBox.className = "day";
+
+  // 현재 선택된 날짜면 강조
+  if (dateStr === selectedStr) {
+    dayBox.classList.add("selected");
+  }
+
+  // 오늘 날짜면 테두리로 구분
+  if (dateStr === todayStr) {
+    dayBox.classList.add("today");
+  }
+
+  // 요일 / 날짜 숫자 / Todo 개수 표시
+  dayBox.innerHTML = `
+    <div class="day-name">${dayNames[date.getDay()]}</div>
+    <div class="day-number">${date.getDate()}</div>
+    <div class="day-count">${count}개</div>
+  `;
+
+  // 날짜 클릭 시 해당 날짜를 선택하고 목록 갱신
+  dayBox.addEventListener("click", () => {
+    selectedDate = new Date(date);
+    editingTodoId = null; // 날짜를 바꾸면 진행 중이던 수정은 취소
+    renderWeekView();
+    renderTodos();
+  });
+
+  return dayBox;
+}
+
+// 현재 weekStartDate 기준으로 월~일 7개 날짜 칸을 그림
+function renderWeekView() {
+  // 기존 칸을 비우고 다시 그림
+  weekView.innerHTML = "";
 
   // 주의 시작(월요일)과 끝(일요일) 날짜 계산
   const weekEndDate = new Date(weekStartDate);
@@ -120,41 +167,7 @@ function renderWeekView() {
     const date = new Date(weekStartDate);
     date.setDate(weekStartDate.getDate() + i);
 
-    const dateStr = formatDate(date);
-
-    // 해당 날짜의 Todo 개수 계산
-    const count = todos.filter((todo) => todo.date === dateStr).length;
-
-    // 날짜 칸 생성
-    const dayBox = document.createElement("div");
-    dayBox.className = "day";
-
-    // 현재 선택된 날짜면 강조
-    if (dateStr === selectedStr) {
-      dayBox.classList.add("selected");
-    }
-
-    // 오늘 날짜면 테두리로 구분
-    if (dateStr === todayStr) {
-      dayBox.classList.add("today");
-    }
-
-    // 요일 / 날짜 숫자 / Todo 개수 표시
-    dayBox.innerHTML = `
-      <div class="day-name">${dayNames[date.getDay()]}</div>
-      <div class="day-number">${date.getDate()}</div>
-      <div class="day-count">${count}개</div>
-    `;
-
-    // 날짜 클릭 시 해당 날짜를 선택하고 목록 갱신
-    dayBox.addEventListener("click", () => {
-      selectedDate = new Date(date);
-      editingTodoId = null; // 날짜를 바꾸면 진행 중이던 수정은 취소
-      renderWeekView();
-      renderTodos();
-    });
-
-    weekView.appendChild(dayBox);
+    weekView.appendChild(createDayBox(date));
   }
 }
 
@@ -284,6 +297,107 @@ function getFilteredTodos() {
 }
 
 /* =========================
+   Todo 항목 렌더링 (수정 모드 / 일반 모드를 각각 함수로 분리)
+========================= */
+
+// 수정 모드 항목 생성: 입력창 + 저장/취소 버튼
+function createEditingItem(todo) {
+  const listItem = document.createElement("li");
+  listItem.className = "todo-item";
+
+  // 기존 텍스트가 채워진 입력창
+  const editInput = document.createElement("input");
+  editInput.type = "text";
+  editInput.className = "todo-edit-input";
+  editInput.value = todo.text;
+
+  // Enter로 저장, Esc로 취소 (키보드 편의 기능)
+  editInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      saveEditTodo(todo.id, editInput.value);
+    } else if (event.key === "Escape") {
+      cancelEditTodo();
+    }
+  });
+
+  // 버튼 영역
+  const actions = document.createElement("div");
+  actions.className = "todo-actions";
+
+  // 저장 버튼
+  const saveButton = document.createElement("button");
+  saveButton.textContent = "저장";
+  saveButton.addEventListener("click", () =>
+    saveEditTodo(todo.id, editInput.value)
+  );
+
+  // 취소 버튼
+  const cancelButton = document.createElement("button");
+  cancelButton.textContent = "취소";
+  cancelButton.addEventListener("click", () => cancelEditTodo());
+
+  actions.append(saveButton, cancelButton);
+  listItem.append(editInput, actions);
+
+  // 수정 모드로 들어오면 입력창에 자동 포커스 + 커서를 끝으로
+  // (요소가 화면에 붙은 뒤 포커스를 주기 위해 호출 시점에 바로 실행)
+  setTimeout(() => {
+    editInput.focus();
+    editInput.setSelectionRange(todo.text.length, todo.text.length);
+  });
+
+  return listItem;
+}
+
+// 일반 모드 항목 생성: 텍스트 + 완료/수정/삭제 버튼
+function createNormalItem(todo) {
+  const listItem = document.createElement("li");
+  listItem.className = "todo-item";
+
+  // Todo 텍스트 영역
+  const textSpan = document.createElement("span");
+  textSpan.className = "todo-text";
+  textSpan.textContent = todo.text;
+
+  // 완료 상태면 취소선 클래스 추가
+  if (todo.completed) {
+    textSpan.classList.add("completed");
+  }
+
+  // 버튼들을 담는 영역
+  const actions = document.createElement("div");
+  actions.className = "todo-actions";
+
+  // 완료 처리 버튼
+  const completeButton = document.createElement("button");
+  completeButton.textContent = todo.completed ? "취소" : "완료";
+  completeButton.addEventListener("click", () => toggleComplete(todo.id));
+
+  // 수정 버튼 (클릭 시 인라인 수정 모드로 전환)
+  const editButton = document.createElement("button");
+  editButton.textContent = "수정";
+  editButton.addEventListener("click", () => startEditTodo(todo.id));
+
+  // 삭제 버튼
+  const deleteButton = document.createElement("button");
+  deleteButton.textContent = "삭제";
+  deleteButton.addEventListener("click", () => deleteTodo(todo.id));
+
+  actions.append(completeButton, editButton, deleteButton);
+  listItem.append(textSpan, actions);
+
+  return listItem;
+}
+
+// 빈 상태 안내 항목 생성
+function createEmptyMessage() {
+  const emptyMessage = document.createElement("li");
+  emptyMessage.className = "empty-message";
+  emptyMessage.textContent = "표시할 할 일이 없습니다.";
+  return emptyMessage;
+}
+
+/* =========================
    Read: 필터링된 Todo를 화면에 렌더링
 ========================= */
 function renderTodos() {
@@ -295,101 +409,15 @@ function renderTodos() {
 
   // 표시할 Todo가 없으면 안내 문구 출력 후 종료
   if (filteredTodos.length === 0) {
-    const emptyMessage = document.createElement("li");
-    emptyMessage.className = "empty-message";
-    emptyMessage.textContent = "표시할 할 일이 없습니다.";
-    todoList.appendChild(emptyMessage);
+    todoList.appendChild(createEmptyMessage());
     return;
   }
 
+  // 각 Todo를 상태에 맞는 모드(수정/일반)로 그려서 목록에 추가
   filteredTodos.forEach((todo) => {
-    // 항목 전체를 감싸는 li
-    const listItem = document.createElement("li");
-    listItem.className = "todo-item";
-
-    // 현재 이 항목이 수정 모드인지 확인
     const isEditing = todo.id === editingTodoId;
-
-    if (isEditing) {
-      // ---- 수정 모드: 텍스트 대신 입력창 + 저장/취소 버튼 ----
-
-      // 기존 텍스트가 채워진 입력창
-      const editInput = document.createElement("input");
-      editInput.type = "text";
-      editInput.className = "todo-edit-input";
-      editInput.value = todo.text;
-
-      // Enter로 저장, Esc로 취소 (키보드 편의 기능)
-      editInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          saveEditTodo(todo.id, editInput.value);
-        } else if (event.key === "Escape") {
-          cancelEditTodo();
-        }
-      });
-
-      // 버튼 영역
-      const actions = document.createElement("div");
-      actions.className = "todo-actions";
-
-      // 저장 버튼
-      const saveButton = document.createElement("button");
-      saveButton.textContent = "저장";
-      saveButton.addEventListener("click", () =>
-        saveEditTodo(todo.id, editInput.value)
-      );
-
-      // 취소 버튼
-      const cancelButton = document.createElement("button");
-      cancelButton.textContent = "취소";
-      cancelButton.addEventListener("click", () => cancelEditTodo());
-
-      actions.append(saveButton, cancelButton);
-      listItem.append(editInput, actions);
-
-      todoList.appendChild(listItem);
-
-      // 수정 모드로 들어오면 입력창에 자동 포커스 + 커서를 끝으로
-      editInput.focus();
-      editInput.setSelectionRange(todo.text.length, todo.text.length);
-    } else {
-      // ---- 일반 모드: 텍스트 + 완료/수정/삭제 버튼 ----
-
-      // Todo 텍스트 영역
-      const textSpan = document.createElement("span");
-      textSpan.className = "todo-text";
-      textSpan.textContent = todo.text;
-
-      // 완료 상태면 취소선 클래스 추가
-      if (todo.completed) {
-        textSpan.classList.add("completed");
-      }
-
-      // 버튼들을 담는 영역
-      const actions = document.createElement("div");
-      actions.className = "todo-actions";
-
-      // 완료 처리 버튼
-      const completeButton = document.createElement("button");
-      completeButton.textContent = todo.completed ? "취소" : "완료";
-      completeButton.addEventListener("click", () => toggleComplete(todo.id));
-
-      // 수정 버튼 (클릭 시 인라인 수정 모드로 전환)
-      const editButton = document.createElement("button");
-      editButton.textContent = "수정";
-      editButton.addEventListener("click", () => startEditTodo(todo.id));
-
-      // 삭제 버튼
-      const deleteButton = document.createElement("button");
-      deleteButton.textContent = "삭제";
-      deleteButton.addEventListener("click", () => deleteTodo(todo.id));
-
-      // 버튼들을 actions에, 텍스트와 actions를 li에 붙이기
-      actions.append(completeButton, editButton, deleteButton);
-      listItem.append(textSpan, actions);
-
-      todoList.appendChild(listItem);
-    }
+    const listItem = isEditing ? createEditingItem(todo) : createNormalItem(todo);
+    todoList.appendChild(listItem);
   });
 }
 
@@ -439,4 +467,4 @@ setupFilterTabs();
 ========================= */
 loadFromLocalStorage(); // 저장된 데이터 불러오기 (새로고침 시 복원)
 renderWeekView(); // 이번 주 날짜 칸 표시
-renderTodos(); // 현재 선택된 날짜 + 필터에 맞는 Todo 목록 표시
+renderTodos();
