@@ -1,0 +1,17 @@
+/* globals.css — 앱 전역 스타일 (보라색 미니멀 테마) */
+@import "tailwindcss";
+
+/* 메인 컬러 등 공통 값을 변수로 정의해 재사용한다 */
+:root {
+  --color-primary: #672be0; /* 메인 보라색 */
+  --color-primary-dark: #571fc4; /* hover 등에 쓰는 진한 보라 */
+  --color-bg: #f7f6fb; /* 페이지 배경 */
+  --color-text: #1f2024; /* 기본 글자색 */
+  --color-muted: #8b8b94; /* 보조 글자색 */
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
